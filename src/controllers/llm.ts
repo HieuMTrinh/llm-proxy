@@ -13,23 +13,26 @@ export interface ModelMap {
   [key: string]: { url: string; model: Model }
 }
 
-const defaultContentType = 'application/json'
+const DEFAULT_CONTENT_TYPE = 'application/json'
+const DEFAULT_PATH = '/v1'
+const POST_METHOD = 'POST'
+const ERROR_INTERNAL_SERVER = 'Internal Server Error'
+const ERROR_PROCESSING_REQUEST = 'Error processing request'
 
-function getPath(url: string): { path: string, base: string, apiKey?: string } {
+function getPath(url: string): { path: string; base: string; apiKey?: string } {
   try {
     const urlParts = url.split('|')
     const apiKey = urlParts.length > 1 ? urlParts[1] : undefined
     const { origin, pathname } = new URL(urlParts[0])
     return {
-      path: pathname === '/' ? '/v1' : pathname,
+      path: pathname === '/' ? DEFAULT_PATH : pathname,
       base: origin,
       apiKey
     }
-  } catch (error) {
-    // Return the input if it's already a path starting with '/'
-    if (url.startsWith('/')) return { path: url, base: 'http://localhost' }
-    // Return '/v1' for invalid URLs
-    return { path: '/v1', base: 'http://localhost' }
+  } catch {
+    return url.startsWith('/')
+      ? { path: url, base: 'http://localhost' }
+      : { path: DEFAULT_PATH, base: 'http://localhost' }
   }
 }
 
@@ -37,29 +40,24 @@ async function fetchModels(targetUrls: string[]): Promise<ModelMap> {
   const tmp: ModelMap = {}
   for (const urlAndToken of targetUrls) {
     const { path, base, apiKey } = getPath(urlAndToken)
-    const headers: { [key: string]: string } = {
-      accept: defaultContentType,
-      'Content-Type': defaultContentType
+    const headers: Record<string, string> = {
+      accept: DEFAULT_CONTENT_TYPE,
+      'Content-Type': DEFAULT_CONTENT_TYPE
     }
-    if (apiKey != null && apiKey !== '') {
-      headers['Authorization'] = `Bearer ${apiKey}`
-    }
-    const params = {
-      method: 'GET',
-      url: `${base}${path}/models`,
-      headers
-    }
+
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+
     try {
-      const response = await axios(params)
+      const response = await axios.get(`${base}${path}/models`, { headers })
       const models = response.data.data || []
-      const hostId = extractDomainName(base)
+      const hostId = extractDomainName(base) // Consider logging the hostId if needed
       models.forEach((model: Model) => {
-        const hash = md5(model.id)
-        tmp[hash] = { url: urlAndToken, model }
+        tmp[md5(model.id)] = { url: urlAndToken, model }
       })
-      log('info', `Models cached successfully for ${base}. [${models.map((m: Model) => m.id).join(', ')}]`)
+      log('info', `Models cached successfully for ${base}. [${models.map((m) => m.id).join(', ')}]`)
     } catch (error) {
-      log('error', `Error fetching models from ${base}${path}/models: ${(error as any).toString()}`)
+      log('error', `Error fetching models from ${base}${path}/models: ${error.message}`)
+      // You might want to maintain error counts or handle retry logic here
     }
   }
   return tmp
@@ -68,7 +66,7 @@ async function fetchModels(targetUrls: string[]): Promise<ModelMap> {
 export class LLMController {
   private app: Express
   private requestHandlers: RequestHandler[]
-  private targetUrls: Array<string> = []
+  private targetUrls: string[] = []
   private modelCache: ModelMap = {}
 
   constructor({
@@ -86,36 +84,30 @@ export class LLMController {
   }
 
   public registerRoutes(): void {
-    this.app.get('/v1/models', ...this.requestHandlers, this.models.bind(this))
+    this.app.get(`${DEFAULT_PATH}/models`, ...this.requestHandlers, this.models.bind(this))
     this.app.use('/', ...this.requestHandlers, this.forwardPostRequest.bind(this))
     log('info', 'LLMController routes registered')
-    log('info', 'fetching model lists')
+    log('info', 'Fetching model lists...')
     this.cacheModels()
   }
 
-  private async cacheModels() {
+  private async cacheModels(): Promise<void> {
     while (true) {
       this.modelCache = await fetchModels(this.targetUrls)
-      await sleep(60000)
+      await sleep(60000) // Rethink interval settings based on your needs
     }
   }
 
   private models(req: Request, res: Response): void {
-    const combinedModels = Object.values(this.modelCache).map((item) => item.model)
-    res.json({ data: combinedModels, object: 'list' })
+    res.json({ data: Object.values(this.modelCache).map((item) => item.model), object: 'list' })
   }
 
   public async forwardPostRequest(req: Request, res: Response, next: NextFunction) {
-    if (
-      req.method === 'POST' &&
-      (req.path.startsWith('v1') || req.path.startsWith('/v1')) &&
-      req.body != null &&
-      req.body.model != null &&
-      this.targetUrls.length > 0
-    ) {
+    if (req.method === POST_METHOD && req.path.startsWith(DEFAULT_PATH)) {
       const { model: modelId } = req.body
       const { base: firstBaseUrl, path: firstPath, apiKey: firstApiKey } = getPath(this.targetUrls[0])
-      let targetUrl = firstBaseUrl // Default to first URL if no matching model found
+
+      let targetUrl = firstBaseUrl
       let targetPath = firstPath
       let targetApiKey = firstApiKey
 
@@ -126,13 +118,16 @@ export class LLMController {
         targetPath = path
         targetApiKey = apiKey
       }
-      const reqPath = req.path.startsWith('/v1/') ? req.path.replace('/v1', targetPath) : `${targetPath}${req.path}`
+
+      const reqPath = req.path.startsWith(`${DEFAULT_PATH}/`)
+        ? req.path.replace(`${DEFAULT_PATH}`, targetPath)
+        : `${targetPath}${req.path}`
       const fullUrl = new URL(reqPath, targetUrl).toString()
       log('info', `Forwarding request to: ${fullUrl} -> ${modelId}`)
-      const headers = { ...req.headers }
-      if (targetApiKey) {
-        headers['Authorization'] = `Bearer ${targetApiKey}`
-      }
+
+      const headers: Record<string, string> = { ...req.headers }
+      if (targetApiKey) headers['Authorization'] = `Bearer ${targetApiKey}`
+
       try {
         const axiosConfig: AxiosRequestConfig = {
           method: req.method,
@@ -143,29 +138,19 @@ export class LLMController {
         }
 
         // Remove headers that might cause issues
-        if (axiosConfig.headers != null) {
-          delete axiosConfig.headers['host']
-          delete axiosConfig.headers['content-length']
-        }
+        delete axiosConfig.headers['host']
+        delete axiosConfig.headers['content-length']
 
         const axiosResponse = await axios(axiosConfig)
-
-        // Forward the response status and headers
         res.status(axiosResponse.status)
-        Object.entries(axiosResponse.headers).forEach(([key, value]) => {
-          res.setHeader(key, value)
-        })
-
-        // Pipe the response data
+        Object.entries(axiosResponse.headers).forEach(([key, value]) => res.setHeader(key, value))
         axiosResponse.data.pipe(res)
       } catch (error) {
-        log(`Error forwarding request: ${(error as any).toString()}`, 'error')
+        log(`Error forwarding request: ${error.message}`, 'error')
         if (axios.isAxiosError(error) && error.response) {
-          // log(`Error response from ${fullUrl}:`, 'error', error.response.data)
-          log(`Request body caused error:`, 'error', req.body)
-          res.status(error.response.status).json({ error: 'Error processing request' })
+          res.status(error.response.status).json({ error: ERROR_PROCESSING_REQUEST })
         } else {
-          res.status(500).json({ error: 'Internal Server Error' })
+          res.status(500).json({ error: ERROR_INTERNAL_SERVER })
         }
       }
     } else {
