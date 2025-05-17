@@ -27,15 +27,13 @@ app.get('/', (req, res) => {
 const authController = new AuthController({ app })
 authController.registerRoutes()
 
-const nginxController = new NginxController({ app, requestHandlers: [ tokenMiddleware ] })
+const nginxController = new NginxController({ app, requestHandlers: [tokenMiddleware] })
 nginxController.registerRoutes()
-nginxController.start()
 
-const llmController = new LLMController({ app, requestHandlers: [tokenMiddleware ], targetUrls })
+const llmController = new LLMController({ app, requestHandlers: [tokenMiddleware], targetUrls })
 llmController.registerRoutes()
 
 // Start the server
 app.listen(port, () => {
   console.log(`Local server running at http://localhost:${port}`)
 })
-
