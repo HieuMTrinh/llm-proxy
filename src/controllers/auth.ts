@@ -26,13 +26,13 @@ export class NginxController {
    */
   public registerRoutes(): void {
     this.app.get('/nginx/reload', ...this.requestHandlers, this.reloadNginx)
-    this.app.post('/nginx/config/update', ...this.requestHandlers, this.updateConfig)
-    this.app.get('/nginx/config/get', ...this.requestHandlers, this.getConfig)
-    this.app.get('/nginx/config/get-default', ...this.requestHandlers, this.getDefaultConfig)
-    this.app.post('/nginx/config/write-default', ...this.requestHandlers, this.writeDefaultConfig)
-    this.app.post('/nginx/certificates/obtain', ...this.requestHandlers, this.obtainCertificates)
-    this.app.get('/nginx/certificates/renew', ...this.requestHandlers, this.renewCertificates)
-
+    this.app.get('/nginx/reload', ...this.requestHandlers, this.reloadNginx.bind(this))
+    this.app.post('/nginx/config/update', ...this.requestHandlers, this.updateConfig.bind(this))
+    this.app.get('/nginx/config/get', ...this.requestHandlers, this.getConfig.bind(this))
+    this.app.get('/nginx/config/get-default', ...this.requestHandlers, this.getDefaultConfig.bind(this))
+    this.app.post('/nginx/config/write-default', ...this.requestHandlers, this.writeDefaultConfig.bind(this))
+    this.app.post('/nginx/certificates/obtain', ...this.requestHandlers, this.obtainCertificates.bind(this))
+    this.app.get('/nginx/certificates/renew', ...this.requestHandlers, this.renewCertificates.bind(this))
     log('info', 'NginxController initialized')
   }
 
