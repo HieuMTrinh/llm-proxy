@@ -42,6 +42,9 @@ authController.registerRoutes()
 const nginxController = new NginxController({ app, requestHandlers: [tokenMiddleware] })
 nginxController.registerRoutes()
 
+// Start the Nginx service
+nginxController.start()
+
 const llmController = new LLMController({ app, requestHandlers: [tokenMiddleware], targetUrls })
 llmController.registerRoutes()
 
